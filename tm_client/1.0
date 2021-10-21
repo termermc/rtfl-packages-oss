@@ -1,0 +1,344 @@
+///@Title tm-client
+///@Name tm-client
+///@Desc TwineMedia API client
+///@Version 1.0
+
+///@guide To create a client, first create an instance. That can be done by storing the return value of tm_instance(api_url, download_url, thumbnail_url).
+///@guide Next, authenticate. You can authenticate via email and password by storing the return value of tm_login_with_email(instance, email, password). You can authenticate with a token using tm_login_with_token(instance, token).
+///@guide If you want to skip fetching user data and logging in, and just want to provide an auth token, you can use tm_auth(token).
+///@guide Finally, create the client with tm_create(instance, auth).
+///@guide Using the client, you can interact with TwineMedia as an authenticated user.
+
+func _mime_for_file(path) {
+    return exec("file", "-b", "--mime-type", path).string_trim
+}
+func _remove_trailing_slash(string) {
+    local str = string
+
+    if str.ends_with("/") {
+        str = str.substring(0, sub(str.string_length, 1))
+    }
+
+    return str
+}
+func _encode_uri_component(string) {
+    local uri = java("java.net.URI", array("http", "example.com", concat("/", string), ""))
+    local path = jmethod(uri, "getRawPath", array())
+
+    return path.substring(1).string_replace("&", "%26").string_replace("=", "%3D").string_replace("/", "%2F").string_replace(":", "%3A")
+}
+func _array_to_json(array) {
+    local m = map()
+    m->a = array
+    local json = m.to_json
+
+    return substring(json, 5, sub(json.string_length, 1))
+}
+
+
+//@desc Creates a request and returns its response using the provided client. Throws an error if the response is an error.
+//@param tm The client to use
+//@param uri The URI (e.g. "/info") to request
+//@param method The method (e.g. "GET") to request with
+//@param data The data to send along with the request (encoded into query params if GET, otherwise encoded as JSON in the request body)
+//@return The response
+//@since 1.0
+func tm_request(tm, uri, method, data) {
+    local res = null
+
+    if [method = "GET"] {
+        local query = "?"
+        local keys = data.map_keys
+        local len = keys.array_length
+        local i = 0
+        while [i < len] {
+            local key = keys[i]
+            if [i > 0] {
+                query = query.concat("&")
+            }
+            query = query.concat(key, "=", _encode_uri_component(map_get(data, key)))
+            inc("i")
+        }
+
+        res = exec("curl", "-s", tm->instance->api.concat(uri, query), "-X", method, "-H", "Authorization: Bearer ".concat(tm->auth->token)).from_json
+    }
+    if ![method = "GET"] {
+        local body = data.to_json
+
+        res = exec("curl", "-s", tm->instance->api.concat(uri), "-X", method, "-H", "Authorization: Bearer ".concat(tm->auth->token), "-H", "Content-Type: application/json", "--data", body).from_json
+    }
+
+    local status = res->status
+
+    if [status = "error"] {
+        throw(concat(method, " request to ", uri, " failed with error: ", res->error))
+    }
+
+    return res
+}
+
+///@desc Creates an instance map using the provided URLs
+///@param api_url The API root URL (e.g. "https://tm.example.com/api/v1")
+///@param download_url The file download root URL (e.g. "https://tm.example.com/download")
+///@param thumbnail_url The thumbnail root URL (e.g. "https://tm.example.com/thumbnail")
+///@return An instance map with the provided URLs
+///@since 1.0
+func tm_instance(api_url, download_url, thumbnail_url) {
+    local inst = map()
+
+    inst->api = _remove_trailing_slash(api_url)
+    inst->download = _remove_trailing_slash(download_url)
+    inst->thumbnail = _remove_trailing_slash(thumbnail_url)
+
+    return inst
+}
+///@desc Creates an auth map using the provided token
+///@param token The API token to use
+///@return An auth map with the provided token
+///@since 1.0
+func tm_auth(token) {
+    local auth = map()
+
+    auth->token = token
+
+    return auth
+}
+
+///@desc Logs in with the provided API token and returns an auth map for it
+///@param instance The instance to log into
+///@param token The API token to use
+///@return An auth map with the provided token and info about it
+///@since 1.0
+func tm_login_with_token(instance, token) {
+    local auth = tm_auth(token)
+    local tm = tm_create(instance, auth)
+
+    local user = tm.tm_request("/account/info", "GET", map())
+
+    auth->user = user
+
+    return auth
+}
+///@desc Logs in with the provided credentials and returns an auth map for it
+///@param instance The instance to log into
+///@param email The email to use
+///@param password The password to use
+///@return An auth map for the provided credentials and info about it
+///@since 1.0
+func tm_login_with_email(instance, email, password) {
+    local auth = map()
+    auth->token = ""
+    local tm = tm_create(instance, auth)
+
+    local info = map()
+    info->email = email
+    info->password = password
+
+    local res = tm.tm_request("/auth", "POST", info)
+
+    return tm_login_with_token(instance, res->token)
+}
+
+///@desc Creates a new TwineMedia client with the provided instance and auth maps
+///@param instance The instance to use
+///@param auth The map to authenticate with
+///@return A new TwineMedia client
+///@since 1.0
+func tm_create(instance, auth) {
+    local tm = map()
+
+    tm->instance = instance
+
+    if ![auth.map_contains_key("user")] {
+        local user = map()
+        user->id = -1
+        user->permissions = array()
+        user->name = "TwineMedia User"
+        user->email = "example@example.com"
+        user->admin = false
+        user->creation_date = "2020-07-11T18:21:27.425724Z"
+        user->exclude_tags = array()
+        user->exclude_other_media = false
+        user->exclude_other_lists = false
+        user->exclude_other_tags = false
+        user->exclude_other_processes = false
+        user->max_upload = -1
+        user->api_token = false
+
+        auth->user = user
+    }
+
+    tm->auth = auth
+
+    return tm
+}
+
+///@desc Refreshes auth info for a client
+///@param tm The client
+///@since 1.0
+func tm_refresh_auth(tm) {
+    tm->auth = tm_login_with_token(tm->instance, tm->auth->token)
+}
+///@desc Fetches info about a client's TwineMedia instance
+///@param tm The client
+///@return Info about the instance
+///@since 1.0
+func tm_instance_info(tm) {
+    return tm.tm_request("/info", "GET", map())
+}
+///@desc Returns files from the client
+///@param tm The client
+///@param offset The offset of files to send
+///@param limit The amount of files to send
+///@param order The order in which to send files
+///@return The files
+///@since 1.0
+func tm_files(tm, offset, limit, order) {
+    local info = map()
+    info->offset = offset
+    info->limit = limit
+    info->order = order
+
+    return tm.tm_request("/media/search", "GET", info)->files
+}
+///@desc Search files from the client
+///@param tm The client
+///@param query The query to search with
+///@param offset The offset of files to send
+///@param limit The amount of files to send
+///@param order The order in which to send files
+///@return The files
+///@since 1.0
+func tm_search(tm, query, offset, limit, order) {
+    local info = map()
+    info->query = query
+    info->offset = offset
+    info->limit = limit
+    info->order = order
+
+    return tm.tm_request("/media/search", "GET", info)->files
+}
+///@desc Searches files by tags from the client
+///@param tm The client
+///@param tags The tags files must include
+///@param exclude_tags The tags files must NOT include
+///@param offset The offset of files to send
+///@param limit The amount of files to send
+///@param order The order in which to send files
+///@return The files
+///@since 1.0
+func tm_tag_search(tm, tags, exclude_tags, offset, limit, order) {
+    local info = map()
+    info->tags = _array_to_json(tags)
+    info->excludeTags = _array_to_json(exclude_tags)
+    info->offset = offset
+    info->limit = limit
+    info->order = order
+
+    return tm.tm_request("/media/tags", "GET", info)->files
+}
+///@desc Fetches a file from the client
+///@param tm The client
+///@param id The file's ID
+///@return The file
+///@since 1.0
+func tm_file(tm, id) {
+    return tm.tm_request(concat("/media/", id), "GET", map())
+}
+///@desc Returns tags matching the provided query
+///@param query (can use % as wildcard, provide empty string to return all)
+///@param offset The offset of tags to return
+///@param limit The amount of tags to return
+///@param order The order in which to return tags
+///@return Tags matching the provided query
+///@since 1.0
+func tm_tags(tm, query, offset, limit, order) {
+    local info = map()
+    info->query = query
+    info->offset = offset
+    info->limit = limit
+    info->order = order
+
+    return tm.tm_request("/tags", "GET", info)->tags
+}
+
+///@desc Uploads a file using a client
+///@param tm The client
+///@param path The path of the file to upload
+///@param options Map of extra upload options (name=string, description=string, tags=array, no_thumbnail=boolean, no_process=boolean)
+///@return The new file's ID
+///@since 1.0
+func tm_upload_file(tm, path, options) {
+    // Check if the file exists
+    if ![is_file(path)] {
+        throw(concat("Path ", path, " is not a file"))
+    }
+
+    // Get MIME type
+    local mime = _mime_for_file(path)
+
+    // Options headers
+    local name_header = "X-NOTHING: "
+    local desc_header = "X-NOTHING: "
+    local tags_header = "X-NOTHING: "
+    local no_thumbnail_header = "X-NOTHING: "
+    local no_process_header = "X-NOTHING: "
+    if options.map_contains_key("name") {
+        name_header = concat("X-FILE-NAME: ", _encode_uri_component(options->name))
+    }
+    if options.map_contains_key("description") {
+        desc_header = concat("X-FILE-DESCRIPTION: ", _encode_uri_component(options->description))
+    }
+    if options.map_contains_key("tags") {
+        tags_header = concat("X-FILE-TAGS: ", _encode_uri_component(_array_to_json(options->tags)))
+    }
+    if options.map_contains_key("no_thumbnail") {
+        no_thumbnail_header = "X-NO-THUMBNAIL: true"
+    }
+    if options.map_contains_key("no_process") {
+        no_process_header = "X-NO-PROCESS: true"
+    }
+
+    // Send file
+    local res = exec("curl", "-s", concat(tm->instance->api, "/media/upload"), "-F", concat("file=@", path, ";type=", mime), "-H", concat("Authorization: Bearer ", tm->auth->token), "-H", name_header, "-H", desc_header, "-H", tags_header, "-H", no_thumbnail_header, "-H", no_process_header, "-X", "POST").from_json
+
+    local status = res->status
+    if [status = "error"] {
+        throw(concat(method, " request to ", uri, " failed with error: ", res->error))
+    }
+
+    return res->id
+}
+///@desc Edits a file's info using a client
+///@param tm The client
+///@param id The ID of the file to edit
+///@param name The file's new name
+///@param filename The file's new filename
+///@param description The file's new description (can be null)
+///@param tags The file's new tags
+///@since 1.0
+func tm_edit_file(tm, id, name, filename, description, tags) {
+    local data = map()
+    data->name = name
+    data->filename = filename
+    data->description = description
+    data->tags = _array_to_json(tags)
+
+    tm.tm_request(concat("/media/", id, "/edit"), "POST", data)
+}
+///@desc Deletes a file using a client
+///@param tm The client
+///@param id The ID of the file to delete
+///@since 1.0
+func tm_delete_file(tm, id) {
+    tm.tm_request(concat("/media/", id, "/delete"), "POST", map())
+}
+
+///@desc Creates a file link from a file map
+///@param tm The client
+///@param file The file map to extract a link from
+///@return The file link
+///@since 1.0
+func tm_file_to_link(tm, file) {
+    return concat(tm->instance->download, "/", file->id, "/", _encode_uri_component(file->filename))
+}

@@ -1,0 +1,10 @@
+{
+  "name": "progress_bar",
+  "version": "1.0",
+  "versions": ["1.0"],
+  "dependencies": {
+    "colors": "1.0",
+    "commons": "1.0"
+  },
+  "type": "source"
+}

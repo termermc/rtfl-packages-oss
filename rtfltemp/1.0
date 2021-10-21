@@ -1,0 +1,91 @@
+func template_to_function(content) {
+    local ARGS = array()
+    local HTML = ""
+    local NAME = null
+
+    // Loop through lines and look for special flags
+    local lines = content.split("\n")
+    local began = false
+    local i = 0
+    while [i < lines.array_length] {
+        local line = lines[i]
+        if began {
+            HTML = HTML.concat(line, "\n")
+        }
+        if ![began] {
+            if line.starts_with("##begin") {
+                began = true
+            }
+            if line.starts_with("##name ") {
+                NAME = line.substring(7).string_trim
+            }
+            if line.starts_with("##arg ") {
+                ARGS.array_add(substring(line, 6))
+            }
+        }
+        
+        inc("i")
+    }
+
+    local RTFL = "// Rtfl template function generated via RtflTemp\n"
+    func append {
+        local i = 0
+        while [i < arglen] {
+            local arg = var(concat("arg", add(i, 1)))
+            RTFL = RTFL.concat(arg)
+            inc("i")
+        }
+    }
+
+    // Begin constructing file //
+
+    // Escapes a string with special characters
+    func escape {
+        return arg1.string_replace("\\", "\\\\").string_replace("\n", concat("\\", "n")).string_replace("\"", "\\\"")
+    }
+
+    // Build function line
+    local args_str = ""
+    local i = 0
+    local argslen = ARGS.array_length
+    while [i < argslen] {
+        local arg = ARGS[i]
+        args_str = args_str.concat(arg)
+        
+        if ![i = argslen.sub(1)] {
+            args_str = args_str.concat(",")
+        }
+        
+        inc("i")
+    }
+    append("func template_", NAME, "(", args_str, ") {\nlocal __tmp = \"\"\n")
+
+    // Loop through file
+    local code = ""
+    while HTML.string_contains("<?rtfl") {
+        local index = HTML.index_of("<?rtfl")
+        local index_end = HTML.index_of("?>")
+        local code = HTML.substring(add(index, 6), index_end)
+        local out = code.concat("\n")
+        
+        if code.starts_with("=") {
+            code = code.substring(1)
+            out = "__tmp = concat(__tmp, ".concat(code, ")\n")
+        }
+        
+        // Collect code before this statement
+        local before = HTML.substring(0, index)
+        append("__tmp = concat(__tmp, \"", escape(before), "\")\n")
+        append(out)
+        
+        // Cut off code
+        HTML = HTML.substring(add(index_end, 2))
+    }
+    append("__tmp = concat(__tmp, \"", escape(HTML), "\")\nreturn __tmp\n}")
+
+    if [NAME = null] {
+        throw("Must specify name attribute for template")
+    }
+
+    return RTFL
+}
